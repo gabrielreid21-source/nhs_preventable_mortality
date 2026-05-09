@@ -5,7 +5,7 @@
 | Source | Dataset | Geography | Period | Access |
 |--------|---------|-----------|--------|--------|
 | NHS Fingertips | Preventable mortality under 75 (IndicatorID 93721, E03) | Districts & UAs (2020/21 boundaries, AreaTypeID 301) | 2011–2019 | fingertipsR package |
-| MHCLG | Index of Multiple Deprivation 2019 — scores by LSOA | LSOA 2011, aggregated to district | 2019 | [gov.uk](https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019) |
+| MHCLG | Index of Multiple Deprivation 2019 (scores by LSOA) | LSOA 2011, aggregated to district | 2019 | [gov.uk](https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019) |
 | ONS Census 2021 | Ethnic group by usual residents (TS021) | District | 2021 | [nomisweb.co.uk](https://www.nomisweb.co.uk) |
 
 All three sources were joined on ONS area codes in PostgreSQL. The analytical table contains one row per district × sex category × time period.
@@ -16,8 +16,8 @@ All three sources were joined on ONS area codes in PostgreSQL. The analytical ta
 
 Two districts were excluded by design:
 
-- **City of London (E09000001)** — a specially constructed administrative unit with a resident population of ~9,000 and a daytime population orders of magnitude larger. Area-level mortality rates are not comparable with standard districts.
-- **Buckinghamshire (E06000060)** — created in April 2020 by merging four former districts. The 2020/21 boundary definition used by Fingertips does not correspond to any consistent geography across the 2011–2019 study period.
+- **City of London (E09000001):** a specially constructed administrative unit with a resident population of ~9,000 and a daytime population orders of magnitude larger. Area-level mortality rates are not comparable with standard districts.
+- **Buckinghamshire (E06000060):** created in April 2020 by merging four former districts. The 2020/21 boundary definition used by Fingertips does not correspond to any consistent geography across the 2011–2019 study period.
 
 ---
 
@@ -78,8 +78,8 @@ This replaces the v1 approach of flagging districts with absolute residuals grea
 | Tool | Version | Purpose |
 |------|---------|---------|
 | R | 4.6.0 | Data cleaning, analysis, visualisation, report |
-| PostgreSQL | — | Relational database, joins, views |
-| Tableau Public | — | Interactive dashboard |
+| PostgreSQL | n/a | Relational database, joins, views |
+| Tableau Public | n/a | Interactive dashboard |
 | fingertipsR | CRAN | NHS Fingertips API extraction |
 | readxl | CRAN | IMD domain data ingestion |
 | ggplot2 | CRAN | All charts |
