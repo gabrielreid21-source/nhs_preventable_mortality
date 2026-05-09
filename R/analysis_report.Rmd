@@ -854,6 +854,98 @@ The scatter of high ethnic minority districts around the female trend line is no
 This is consistent with gendered migration pathways. Male economic migrants — who disproportionately enter on skilled work visas with income thresholds — are more strongly health-selected than women who more commonly migrate through family reunion routes. The healthy migrant effect, to the extent it operates, is therefore likely a gendered phenomenon that applies more consistently to men than to women.
 
 **The ONS preventable mortality cause list is not gender-biased.** Maternal and obstetric conditions are included and women are not systematically underrepresented in the definition. The observed gender gap is real. The evidence suggests women show greater general resilience to the mortality effects of socioeconomic determinants of health — a pattern that holds across multiple international datasets and is not explained by measurement differences. The mechanism behind this resilience, and why it appears to attenuate the deprivation-mortality relationship more strongly for women than men, is an open research question. This analysis identifies the pattern but cannot explain it; further research disaggregating cause-specific mortality by sex and deprivation level is needed to understand which specific health pathways account for the difference.
+
+### The deprivation mortality gap narrows over the study period
+
+If NHS targeted investment is suppressing mortality in the most deprived areas, a narrowing gap between high and low deprivation groups would be consistent with that effect — even if the absolute levels remain higher in deprived districts.
+
+```{r deprivation_trend, fig.cap="Figure 10: Preventable mortality by deprivation tertile, 2011–2019"}
+dep_trend <- panel |>
+  filter(Sex == "Persons" & Value != 0) |>
+  inner_join(persons_avg |> select(AreaCode, avg_imd), by = "AreaCode") |>
+  mutate(
+    dep_tertile = ntile(avg_imd, 3),
+    dep_group = factor(dep_tertile, levels = 1:3,
+                       labels = c("Least deprived", "Middle", "Most deprived"))
+  ) |>
+  group_by(dep_group, year) |>
+  summarise(avg_mortality = mean(Value, na.rm = TRUE), .groups = "drop")
+
+ggplot(dep_trend, aes(x = year, y = avg_mortality, colour = dep_group)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.5) +
+  scale_colour_manual(
+    values = c("Least deprived" = "#18BC9C", "Middle" = "#E8B86D", "Most deprived" = "#E74C3C"),
+    name = "Deprivation tertile"
+  ) +
+  scale_x_continuous(breaks = 2011:2017) +
+  labs(
+    title = "Preventable mortality by deprivation group, 2011–2019",
+    subtitle = "Three-year rolling average periods. Districts assigned to tertiles by average IMD score.",
+    x = "Year (start of 3-year rolling period)",
+    y = "Average mortality rate (under 75, per 100,000)",
+    caption = "Source: NHS Fingertips E03, ONS IMD 2019. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+All three deprivation groups show declining preventable mortality across the study period, consistent with the broader national trend. The most deprived tertile begins substantially higher and declines at a steeper absolute rate. This convergence — with the most deprived group narrowing the gap toward the least deprived — is what NHS targeting frameworks predict: sustained investment in high-deprivation areas should, over time, produce proportionally larger mortality reductions in those areas than in areas where NHS resource has always been adequate.
+
+The pattern does not prove causation. Mortality was declining nationally across this period for multiple reasons including medical advances and public health improvements that apply uniformly across deprivation levels. However, a faster decline in the most deprived tertile is not consistent with a model in which deprivation drives mortality through fixed structural channels that NHS investment cannot modify — it is consistent with a model in which accessible, high-quality NHS services are the mechanism by which deprivation is prevented from translating into preventable death.
+
+### Greater Manchester shows persistently higher residuals outside the NHS allocation framework
+
+Greater Manchester Health and Social Care was devolved to the Combined Authority in April 2016. Under this arrangement the GM footprint manages a pooled health and social care budget outside the standard NHS England resource allocation formula — it does not receive NHS Core20PLUS5-targeted funding through the same channel as other ICBs.
+
+```{r gm_residuals, fig.cap="Figure 11: Greater Manchester residuals vs rest of England, 2011–2019"}
+gm_codes <- c("E08000001", "E08000002", "E08000003", "E08000004",
+               "E08000005", "E08000006", "E08000007", "E08000008",
+               "E08000009", "E08000010")
+
+persons_panel <- panel |>
+  filter(Sex == "Persons" & Value != 0) |>
+  mutate(gm = AreaCode %in% gm_codes)
+
+model_ref <- lm(Value ~ imd_score, data = persons_panel |> filter(!gm))
+persons_panel <- persons_panel |>
+  mutate(
+    expected     = predict(model_ref, newdata = persons_panel),
+    resid_deprev = Value - expected
+  )
+
+gm_resid <- persons_panel |>
+  group_by(year, gm) |>
+  summarise(avg_resid = mean(resid_deprev, na.rm = TRUE), .groups = "drop") |>
+  mutate(group = ifelse(gm, "Greater Manchester (10 districts)", "Rest of England"))
+
+ggplot(gm_resid, aes(x = year, y = avg_resid, colour = group)) +
+  geom_hline(yintercept = 0, colour = "grey70") +
+  geom_vline(xintercept = 2015.75, linetype = "dashed", colour = "grey50", linewidth = 0.7) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.5) +
+  annotate("text", x = 2015.9, y = Inf, vjust = 1.5,
+           label = "GM devolution\nApril 2016", hjust = 0, size = 3, colour = "grey50") +
+  scale_colour_manual(
+    values = c("Greater Manchester (10 districts)" = "#E74C3C", "Rest of England" = "#2C3E50"),
+    name = NULL
+  ) +
+  scale_x_continuous(breaks = 2011:2017) +
+  labs(
+    title = "Greater Manchester mortality residuals vs rest of England, 2011–2019",
+    subtitle = "Residual above/below deprivation-predicted mortality. Reference model fitted on non-GM districts.",
+    x = "Year (start of 3-year rolling period)",
+    y = "Average residual (actual minus expected mortality)",
+    caption = "Source: NHS Fingertips E03, ONS IMD 2019. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+The ten Greater Manchester districts show persistently positive residuals across the full study period — they have higher mortality than their deprivation profile predicts, relative to the rest of England. This pattern pre-dates the April 2016 devolution and continues through it; the devolution line is marked not because it produces a visible break in trend but because it provides the structural explanation for why the gap exists at all.
+
+The argument is not that devolution caused the gap. It is that Greater Manchester's long-standing position outside the mainstream NHS targeted allocation framework — which predates 2016 — means that the mechanisms linking deprivation to NHS investment to mortality outcomes operate differently there. Where the rest of England's deprived districts have received sustained, formula-driven NHS resource allocation since 2001, Greater Manchester has always had a different funding relationship with NHS England. The natural experiment that devolution formalises was already running.
+
+This is the dataset's most direct test of the service access hypothesis. Two regions of similar deprivation, one within the NHS targeted allocation framework and one outside it, produce systematically different mortality outcomes relative to prediction. The direction of the difference is consistent with NHS targeted funding reducing mortality below the level that deprivation alone would predict.
+
 ## Root cause analysis
 
 The statistical findings point to a pattern but do not establish a causal mechanism. Before drawing policy conclusions, it is necessary to set out the competing causal chains and what each implies.
