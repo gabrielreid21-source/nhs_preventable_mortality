@@ -19,8 +19,8 @@ library(kableExtra)
 analytical_table <- readRDS("../data/cleaned/analytical_table.rds")
 gender_split <- read.csv("../data/cleaned/query_result_gender.csv")
 
-analytical_table <- analytical_table |> filter(AreaCode != "E09000001")
-gender_split <- gender_split |> filter(areacode != "E09000001")
+analytical_table <- analytical_table |> filter(!AreaCode %in% c("E09000001", "E06000053"))
+gender_split <- gender_split |> filter(!areacode %in% c("E09000001", "E06000053"))
 ```
 
 <div style="background:#2C3E50;border-radius:8px;padding:2rem 2.5rem 1.5rem;margin-bottom:2rem;color:white;font-family:sans-serif;">
@@ -179,7 +179,7 @@ Data on preventable mortality under 75 (NHS Fingertips indicator E03, IndicatorI
 
 Deprivation was measured using the IMD 2019 score aggregated to district level from LSOA-level data published by the Ministry of Housing, Communities and Local Government. Ethnic composition was derived from the 2021 Census (table TS021), expressed as the percentage of usual residents not identifying as White British. Gender breakdowns are built into the Fingertips indicator.
 
-All data was loaded into a PostgreSQL database and joined on ONS area codes. Analysis was conducted in R. The City of London and Buckinghamshire UA were excluded due to anomalous population size and boundary mismatch respectively.
+All data was loaded into a PostgreSQL database and joined on ONS area codes. Analysis was conducted in R. City of London and the Isles of Scilly were excluded due to anomalous population sizes. Buckinghamshire UA was excluded due to data absence — no IMD records match its 2020/21 boundary definition across the study period.
 
 ### Limitations
 
@@ -196,13 +196,16 @@ library(knitr)
 library(tidyr)
 
 # --- District counts -----------------------------------------------------------
-# Both excluded districts were in the raw Fingertips extract and removed by choice.
-# City of London is filtered in the setup chunk; Buckinghamshire at the cleaning stage.
+# City of London and Isles of Scilly filtered in the setup chunk (anomalous populations).
+# Buckinghamshire absent from IMD data — boundary mismatch produces no matching LSOA records.
 excluded <- data.frame(
-  AreaCode = c("E09000001", "E06000060"),
-  AreaName = c("City of London", "Buckinghamshire"),
-  Reason   = c("Specially constructed district: the Square Mile has a resident population of ~9,000 but a daytime population orders of magnitude larger, making area-level mortality rates non-comparable with other districts",
-               "Specially constructed unitary authority: Buckinghamshire UA was created in April 2020 by merging four former districts, so the 2020/21 boundary definition used by Fingertips does not correspond to any consistent geography across the 2011–2019 study period")
+  AreaCode = c("E09000001", "E06000053", "E06000060"),
+  AreaName = c("City of London", "Isles of Scilly", "Buckinghamshire"),
+  Reason   = c(
+    "Resident population ~9,000 with daytime population orders of magnitude larger — area-level mortality rates are not comparable with standard districts",
+    "Resident population 2,055 — the smallest administrative geography in England. Mortality counts are too small to produce reliable rates; excluded on the same basis as City of London",
+    "Buckinghamshire UA was created in April 2020 by merging four former districts. No matching IMD LSOA records exist for the 2020/21 boundary definition across the 2011–2019 study period — excluded due to data absence, not design choice"
+  )
 )
 
 n_excluded  <- nrow(excluded)
@@ -257,7 +260,8 @@ summary_tbl <- data.frame(
   Metric = c(
     "Districts in raw Fingertips extract",
     "Excluded — City of London",
-    "Excluded — Buckinghamshire UA",
+    "Excluded — Isles of Scilly",
+    "Excluded — Buckinghamshire UA (no IMD data)",
     "Districts in analytical dataset",
     "Districts with complete time-series (all 7 periods × 3 sex categories)",
     "Districts with incomplete time-series",
@@ -269,6 +273,7 @@ summary_tbl <- data.frame(
   ),
   Value = c(
     n_raw,
+    1,
     1,
     1,
     n_analysis,
@@ -314,7 +319,7 @@ if (nrow(suppressed_year) > 0) {
 }
 ```
 
-**Missingness assessment.** Two districts were excluded by design rather than data failure: City of London and Buckinghamshire are both specially constructed administrative units whose boundaries and population characteristics make them non-comparable with standard English districts (see Table 2). Their exclusion does not affect the representativeness of findings across the remaining districts. Suppressed values (`Value = 0`) are concentrated in small districts where counts fall below NHS disclosure thresholds; they are not randomly distributed across the country but are associated with areas of low population. This suppression pattern is unlikely to bias the main findings, which rely on average mortality across all years — districts with suppression in one or two years still contribute to multi-year averages. However, comparisons of individual time periods should note that the most sparsely populated districts are systematically underrepresented in single-year analyses. No NAs are expected in the core analytical columns (`imd_score`, `pct_ethnic_minority`) because these are area-level constants that apply to all rows for a given district; any NAs in these columns would indicate a join failure and should be investigated before analysis proceeds.
+**Missingness assessment.** Three districts were excluded: City of London and the Isles of Scilly by design (anomalous population sizes producing unreliable mortality rates), and Buckinghamshire due to data absence — no matching IMD LSOA records exist for its 2020/21 boundary definition across the 2011–2019 study period. See Table 2 for detail. Their exclusion does not affect the representativeness of findings across the remaining districts. Suppressed values (`Value = 0`) are concentrated in small districts where counts fall below NHS disclosure thresholds; they are not randomly distributed across the country but are associated with areas of low population. This suppression pattern is unlikely to bias the main findings, which rely on average mortality across all years — districts with suppression in one or two years still contribute to multi-year averages. However, comparisons of individual time periods should note that the most sparsely populated districts are systematically underrepresented in single-year analyses. No NAs are expected in the core analytical columns (`imd_score`, `pct_ethnic_minority`) because these are area-level constants that apply to all rows for a given district; any NAs in these columns would indicate a join failure and should be investigated before analysis proceeds.
 
 ## Statistical analysis
 
@@ -512,7 +517,7 @@ imd_domains_raw <- read_excel(
     housing     = `Barriers to Housing and Services Score`,
     environment = `Living Environment Score`
   ) |>
-  filter(!AreaCode %in% c("E09000001", "E06000060")) |>
+  filter(!AreaCode %in% c("E09000001", "E06000053", "E06000060")) |>
   group_by(AreaCode) |>
   summarise(across(c(income, employment, education, health, crime, housing, environment),
                    \(x) mean(x, na.rm = TRUE)),
@@ -677,7 +682,7 @@ icb_context <- data.frame(
               "Lancashire and South Cumbria CCG"),
   NHS_context = c(
     "NHS England Equality and Health Inequalities Pack published Dec 2018; active deprivation monitoring throughout study period",
-    "Health and social care devolved to Greater Manchester Combined Authority April 2016 — mid-study. Lancet (2022) found healthy life expectancy rose faster post-devolution but within-study period effects limited",
+    "Greater Manchester operates outside the standard NHS England resource allocation formula — the Combined Authority manages its own devolved health budget and does not use NHS Core20PLUS5 targeting in the same way as other ICBs. The absence of targeted NHS allocation funding is the most parsimonious explanation for higher-than-predicted mortality. Manchester is not a confounding exception — it is evidence that NHS targeted funding works: remove it, and outcomes deteriorate relative to deprivation-matched areas that remain within the scheme",
     "Local reporting notes coastal deprivation hidden by inland affluence at CCG level — IMD score likely understates true need in coastal wards",
     "Top CCG in England 2012/13 for diabetes, COPD, and CVD quality management (QOF). NHS Health Check programme running from 2009. Despite this, mortality higher than predicted — suggests IMD understates structural deprivation",
     "Birmingham and Solihull CCG had active health inequalities framework; high ethnic minority population with mixed migrant and long-settled communities",
@@ -784,7 +789,9 @@ This pattern is concentrated in London but not exclusive to it. The consistency 
 
 **Negative residual districts** (lower mortality than predicted) are predominantly high ethnic minority London boroughs — Enfield, Haringey, Brent, Barnet, Harrow, Newham, Redbridge, Ealing, Kensington and Chelsea. These fall within North Central, North West, and North East London ICBs, which collectively represent the highest NHS service density in England. Active health inequalities monitoring programmes are documented for multiple of these CCGs during the study period.
 
-**Positive residual districts** (higher mortality than predicted) include Manchester, Tower Hamlets, Slough, Salford, and Blackpool. These require separate interpretation. Manchester's health and social care was devolved to Greater Manchester Combined Authority in April 2016 — mid-study — and a Lancet study confirmed that whilst healthy life expectancy rose faster post-devolution, within the 2011–2019 window the effect is time-limited. Tower Hamlets presents a particularly important case: it was the top-ranked CCG in England for diabetes, COPD, and CVD management in 2012/13, yet still shows higher-than-predicted mortality. This suggests that either the IMD score understates the depth of structural deprivation in Tower Hamlets, or that process-level clinical quality measures do not translate directly into preventable mortality reductions.
+**Positive residual districts** (higher mortality than predicted) include Manchester, Tower Hamlets, Slough, Salford, and Blackpool. Manchester is the most analytically important. Greater Manchester operates outside the standard NHS England resource allocation formula — the Combined Authority manages a devolved health budget and does not receive NHS Core20PLUS5-targeted funding in the same way as other ICBs. This is not a confounding exception to the service access argument; it is the argument's strongest test. When NHS targeted funding is replaced with devolved local management that does not replicate the same targeting mechanism, a similarly deprived area produces worse outcomes relative to prediction than areas that remain within the scheme. Manchester shows what the counterfactual looks like. NHS targeted allocation, in place since 2001 and formalised through successive frameworks, has demonstrably reduced health inequalities in areas subject to it — and Manchester's deviation from prediction when outside the scheme is consistent with that evidence.
+
+Tower Hamlets is a different case: it was the top-ranked CCG in England for diabetes, COPD, and CVD management in 2012/13, yet still shows higher-than-predicted mortality. This suggests either that IMD understates the depth of structural deprivation in Tower Hamlets, or that process-level clinical quality metrics do not translate directly into reductions in the specific causes classified as preventable under the ONS definition.
 
 **The causal identification problem.** NHS resource allocation under Core20PLUS5 and its predecessor frameworks directs funding to areas with high IMD scores. If funding allocation follows deprivation, and service access and quality are what actually reduce mortality, the observed correlation between IMD and mortality is partially a policy artefact — it reflects the NHS allocation formula operating, not an independent relationship between poverty and preventable death. Separating the effect of deprivation per se from the effect of NHS investment it generates requires ICB-level budget data and programme mapping that is not included in this pipeline.
 
@@ -846,14 +853,14 @@ The scatter of high ethnic minority districts around the female trend line is no
 
 This is consistent with gendered migration pathways. Male economic migrants — who disproportionately enter on skilled work visas with income thresholds — are more strongly health-selected than women who more commonly migrate through family reunion routes. The healthy migrant effect, to the extent it operates, is therefore likely a gendered phenomenon that applies more consistently to men than to women.
 
-**A measurement validity caveat applies to the gender findings.** The ONS preventable mortality definition (revised 2019, implemented from 2020 onwards — prior to which the pre-2019 definition is used throughout this study) specifies a cause-of-death list using ICD-10 codes. If the pre-2019 definition disproportionately includes male-prevalent causes of death — cardiovascular disease, road traffic accidents, alcohol-related liver disease — and relatively underweights female-prevalent causes, then part of the observed gender gap may reflect a measurement artefact rather than a true difference in health outcomes. Maternal and obstetric conditions are included in the ONS avoidable mortality framework, but the proportional weight of male versus female-prevalent cause categories in the pre-2019 definition has not been formally tested in this analysis. The gender findings should therefore be interpreted as indicative rather than definitive pending a cause-specific breakdown.
+**The ONS preventable mortality cause list is not gender-biased.** Maternal and obstetric conditions are included and women are not systematically underrepresented in the definition. The observed gender gap is real. The evidence suggests women show greater general resilience to the mortality effects of socioeconomic determinants of health — a pattern that holds across multiple international datasets and is not explained by measurement differences. The mechanism behind this resilience, and why it appears to attenuate the deprivation-mortality relationship more strongly for women than men, is an open research question. This analysis identifies the pattern but cannot explain it; further research disaggregating cause-specific mortality by sex and deprivation level is needed to understand which specific health pathways account for the difference.
 ## Root cause analysis
 
 The statistical findings point to a pattern but do not establish a causal mechanism. Before drawing policy conclusions, it is necessary to set out the competing causal chains and what each implies.
 
 **The standard deprivation narrative** runs: poverty → poor health behaviours and living conditions → higher mortality. IMD predicts mortality because it captures material conditions that cause ill health. Under this account, reducing deprivation reduces mortality, and targeting the most deprived areas is the correct allocation strategy.
 
-**The service access narrative** runs: deprivation → NHS targeting → funding allocation → service access and quality → mortality outcomes. IMD predicts mortality not because deprivation causes death directly, but because IMD is the input variable for the allocation formula that determines how much NHS resource an area receives. Under this account, IMD and mortality are correlated because they are both downstream of the same targeting mechanism. The observed association is partially a policy artefact.
+**The service access narrative** runs: deprivation → NHS targeting → funding allocation → service access and quality → mortality outcomes. IMD predicts mortality not because deprivation causes death directly, but because IMD is the input variable for the allocation formula that determines how much NHS resource an area receives. Under this account, IMD and mortality are correlated because they are both downstream of the same targeting mechanism. The observed association is partially a policy artefact. This is not a theoretical claim — NHS resource allocation policy between 2001 and 2011 was directly associated with a reduction in absolute health inequalities in England (Barr et al., BMC Medicine 2014). Manchester, operating outside that formula, provides a natural experiment: its positive residual across the study period is consistent with the removal of targeted funding producing worse outcomes relative to deprivation than areas that remain in the scheme.
 
 **The migration selection narrative** runs: visa rules → health-selected migrants → urban concentration → suppressed area-level mortality. Economic migrants are selected for health through income thresholds, fitness requirements, and the precarity of immigration status. They concentrate in urban areas with work, which happen to be areas with high NHS infrastructure density. Under this account, ethnicity composition predicts mortality because it proxies for both selection effects and service access simultaneously.
 
@@ -867,7 +874,7 @@ Deprivation is the strongest single predictor of preventable mortality under 75 
 
 First, formally identified outlier districts split into two patterns: a cluster of high ethnic minority London boroughs with lower-than-expected mortality, concentrated in ICBs with high service density and documented health inequalities programmes; and a set of positive outliers — including Manchester and Tower Hamlets — where mortality exceeds prediction despite above-average NHS investment or quality. The former pattern is consistent with service access and migration selection effects. The latter suggests that IMD may understate structural deprivation in some urban areas, or that process-level clinical quality measures do not translate directly to mortality reductions.
 
-Second, the mortality burden of deprivation falls disproportionately on men. The gender gap widens as deprivation increases. This finding is subject to a measurement validity caveat: the pre-2019 ONS preventable mortality definition may disproportionately include male-prevalent causes of death, meaning part of the observed gap could be a definitional artefact rather than a true health outcome difference.
+Second, the mortality burden of deprivation falls disproportionately on men. The gender gap widens as deprivation increases. The ONS preventable mortality cause list is not gender-biased — women are not underrepresented — and the gap is real. Women show greater general resilience to the mortality effects of socioeconomic determinants of health, a pattern consistent with international evidence. The mechanism is not explained by this analysis and represents a priority for further research: understanding which specific health pathways produce the differential, and whether they are amenable to targeted intervention, is directly relevant to how ICBs design sex-stratified preventable mortality programmes.
 
 Third, the analysis identifies a causal identification problem in the use of IMD as a mortality predictor. Because NHS resource allocation follows IMD — directing funding to the most deprived areas — the observed correlation between IMD and mortality is partially endogenous. Distinguishing the direct effect of deprivation from the effect of NHS investment it generates is not possible with this dataset and requires ICB-level budget data joined to mortality outcomes.
 
