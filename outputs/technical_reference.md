@@ -17,8 +17,9 @@ This document walks through every tool, function, technique, and design decision
 7. [Factor analysis: IMD domain structure](#7-factor-analysis-imd-domain-structure)
 8. [Formal outlier testing](#8-formal-outlier-testing)
 9. [Original findings charts](#9-original-findings-charts)
-10. [PostgreSQL and the unified SQL file](#10-postgresql-and-the-unified-sql-file)
-11. [Repository structure and supporting files](#11-repository-structure-and-supporting-files)
+10. [Service access analyses (deprivation tertile trend, GM residuals)](#10-service-access-analyses-deprivation-tertile-trend-gm-residuals)
+11. [PostgreSQL and the unified SQL file](#11-postgresql-and-the-unified-sql-file)
+12. [Repository structure and supporting files](#12-repository-structure-and-supporting-files)
 
 ---
 
@@ -42,6 +43,7 @@ output:
 - `dplyr`: the core data manipulation library. The `|>` pipe operator chains transformations left-to-right. Functions like `filter()`, `mutate()`, `group_by()`, `summarise()`, `select()`, `n_distinct()` all come from here.
 - `ggplot2`: the charting library. Every chart in the report is built by layering `geom_` functions onto a `ggplot()` call.
 - `ggrepel`: adds `geom_label_repel()` which places text labels on charts without overlapping each other. Used in every scatter plot.
+- `kableExtra`: extends `kable()` with formatting helpers. Used for `column_spec()` to control column widths in the wide ICB context table (Table 9), which would otherwise overflow the page.
 
 ---
 
@@ -56,11 +58,14 @@ gender_split <- read.csv("../data/cleaned/query_result_gender.csv")
 
 **Relative paths:** `../data/cleaned/` means "go up one directory from where this Rmd lives (the `R/` folder), then into `data/cleaned/`." This makes the project portable; anyone who clones the repo and has the data files in the right place can knit without editing paths.
 
-**The City of London filter:**
+**The exclusion filter:**
 ```r
-analytical_table <- analytical_table |> filter(AreaCode != "E09000001")
+analytical_table <- analytical_table |> filter(!AreaCode %in% c("E09000001", "E06000053"))
+gender_split    <- gender_split    |> filter(!areacode %in% c("E09000001", "E06000053"))
 ```
-This runs immediately on load, so every subsequent chunk works with the already-filtered dataset. Buckinghamshire (`E06000060`) was excluded earlier in the cleaning pipeline, so it's already absent from the RDS file.
+Two districts are excluded here on every knit: City of London (`E09000001`, resident population ~9,000 with a daytime population orders of magnitude larger) and the Isles of Scilly (`E06000053`, resident population 2,055, the smallest administrative geography in England). Both produce mortality rates that aren't comparable with standard districts because the denominators are anomalous. The third excluded district, Buckinghamshire UA (`E06000060`), was filtered earlier in the cleaning pipeline because no IMD LSOA records match its 2020/21 boundary; it's already absent from the RDS file.
+
+Note the `!AreaCode %in% c(...)` idiom: `%in%` returns a logical vector indicating whether each value is in the supplied set, and `!` negates it. This is cleaner than chained `&` conditions when excluding multiple values. The `gender_split` filter uses lowercase `areacode` because that data frame comes from PostgreSQL where column names are lowercased on export.
 
 ---
 
@@ -306,6 +311,19 @@ Three dimensions of information on one chart:
 
 The dashed lines at ±2 mark the outlier threshold. Points outside the band are formal outliers.
 
+### The ICB context table (Table 9)
+
+```r
+kable(icb_context, ...) |>
+  kableExtra::column_spec(4, width = "35em")
+```
+
+Every district flagged as a formal outlier is mapped, by hand, to its parent CCG (during the study period) or successor ICB, with a free-text column noting documented NHS activity that may partially explain the residual. This is the most important non-statistical chunk in the report; without it, the outlier list is just a list of names. With it, the table becomes the bridge between the model's residuals and the service-access argument.
+
+`kableExtra::column_spec(4, width = "35em")` forces the fourth column (the long NHS context column) to a specific width. Without it, the default kable rendering lets the column expand to fit content, which pushes the other columns off-screen on narrow pages. `35em` is roughly 35 character widths and reads comfortably without wrapping the headers.
+
+**Why the table is hand-curated and not data-driven:** ICB structures changed across the study period (CCGs were absorbed into ICBs in July 2022), and there's no single mapping table that captures pre/post structures consistently. Each district's NHS context required a separate secondary research lookup. This chunk encodes that research as a static data frame; it doesn't compute anything from the analytical table.
+
 ---
 
 ## 9. Original findings charts
@@ -346,7 +364,68 @@ geom_point(aes(size = avg_ethnicity), alpha = 0.5)
 
 ---
 
-## 10. PostgreSQL and the unified SQL file
+## 10. Service access analyses (deprivation tertile trend, GM residuals)
+
+These two charts were added when the report was reframed around service access and NHS targeting. Both build on objects already created earlier in the document (`panel`, `persons_avg`) so that the reference data is identical to what the regression and outlier sections used.
+
+### Deprivation tertile trend (Figure 10)
+
+```r
+dep_trend <- panel |>
+  filter(Sex == "Persons" & Value != 0) |>
+  inner_join(persons_avg |> select(AreaCode, avg_imd), by = "AreaCode") |>
+  mutate(
+    dep_tertile = ntile(avg_imd, 3),
+    dep_group   = factor(dep_tertile, levels = 1:3,
+                         labels = c("Least deprived", "Middle", "Most deprived"))
+  ) |>
+  group_by(dep_group, year) |>
+  summarise(avg_mortality = mean(Value, na.rm = TRUE), .groups = "drop")
+```
+
+**The key design choice is `inner_join(persons_avg ...)` rather than computing tertiles inline.** `persons_avg` already holds each district's average IMD across all years. Joining on it means the tertile assignment uses a single stable IMD value per district, not a year-by-year IMD that would shuffle districts between groups across the panel. A district stays in its tertile for all 7 years.
+
+`ntile(avg_imd, 3)` returns 1, 2, or 3 for each district based on rank-ordered IMD. `factor(..., labels = ...)` converts the integer tertile into a labelled factor in the right order, which controls both the legend order and the colour mapping.
+
+`group_by(dep_group, year) |> summarise(avg_mortality = mean(Value, ...))` produces the line chart's plotting data: one mortality average per tertile per year.
+
+**Reading the chart.** Three line segments, each tracing the average mortality of one deprivation tertile across 2011–2017 (the start years of each three-year rolling period). If the most-deprived line declines more steeply than the least-deprived, the gap is narrowing. That's what NHS targeting frameworks predict.
+
+**What the chart cannot show.** Whether the narrowing is *caused* by NHS investment or by independent national trends. The chart is consistent with the targeting argument but doesn't isolate it. The narrative paragraph in the report makes this caveat explicitly.
+
+### Greater Manchester residuals (Figure 11)
+
+```r
+gm_codes <- c("E08000001", "E08000002", ..., "E08000010")  # 10 GM districts
+
+persons_panel <- panel |>
+  filter(Sex == "Persons" & Value != 0) |>
+  mutate(gm = AreaCode %in% gm_codes)
+
+model_ref <- lm(Value ~ imd_score, data = persons_panel |> filter(!gm))
+persons_panel <- persons_panel |>
+  mutate(
+    expected     = predict(model_ref, newdata = persons_panel),
+    resid_deprev = Value - expected
+  )
+```
+
+**The critical methodological choice is fitting the reference model on non-GM districts only.** If `model_ref` were fitted on the full panel, GM's positive residuals would pull the regression line upward, partially absorbing the very signal the chart is trying to expose. By fitting only on `!gm` rows and then predicting onto the whole panel (including GM), the GM residuals are measured against a model that has never seen them. This is the same logic as out-of-sample prediction.
+
+The residual `Value - expected` is then averaged by year and GM flag to produce the two trend lines.
+
+**`predict(model_ref, newdata = persons_panel)`** generates fitted values for every row in the new data using the coefficients learned on the training subset. As long as the predictor (`imd_score`) is present in `newdata`, this works for rows the model never saw.
+
+**Visual elements that do work in this chart:**
+- `geom_hline(yintercept = 0)`: the reference line where actual equals predicted. Distance from this line is the magnitude of over- or under-prediction.
+- `geom_vline(xintercept = 2015.75)`: marks the April 2016 devolution. Set at 2015.75 rather than 2016 because the period start years on the x-axis are 2011, 2012, ... 2017 and 2015.75 sits between the 2015 (2015–17) and 2016 (2016–18) periods.
+- `annotate("text", x = 2015.9, y = Inf, vjust = 1.5, ...)`: places a label at the top of the panel near the devolution line. `y = Inf` means "the top edge of the data area" and `vjust = 1.5` shifts the label down from the edge so it doesn't get clipped.
+
+**The argument the chart makes.** GM residuals are positive (worse than predicted) across the full study period, not only after 2016. Devolution is therefore not the cause of the gap; it formalised an arrangement that had effectively been in place. The chart is one piece of within-dataset evidence for the natural-experiment claim in the prose.
+
+---
+
+## 11. PostgreSQL and the unified SQL file
 
 ### Why PostgreSQL was used
 
@@ -375,9 +454,11 @@ A Common Table Expression (CTE) is a named temporary result set. It's like creat
 
 **`CREATE OR REPLACE VIEW`:** a saved query that behaves like a virtual table. The `outlier_analysis` view can be queried repeatedly without re-running the CTE logic. `OR REPLACE` means it overwrites any existing view with that name.
 
+**Exclusions in SQL.** The unified SQL file uses `WHERE AreaCode NOT IN ('E09000001', 'E06000060')` to drop City of London and Buckinghamshire UA at query time. The Isles of Scilly exclusion (`E06000053`) is currently applied only in the R setup chunk; if you re-export any tables from PostgreSQL after this, add `'E06000053'` to the SQL `NOT IN` lists for consistency.
+
 ---
 
-## 11. Repository structure and supporting files
+## 12. Repository structure and supporting files
 
 ### `.gitignore`
 
@@ -395,7 +476,7 @@ Documents the data pipeline from raw source to analytical output. Includes an AS
 
 ### `outputs/case_study.md`
 
-A policy argument document. Structured differently from the report: it leads with the implication (IMD-based allocation may misidentify risk), presents evidence from the regression, factor analysis, and outlier testing, then makes recommendations framed in Core20PLUS5 language. Intended to be converted to PDF for job applications.
+A policy argument document. Structured differently from the report: it leads with the service-access reframe (NHS targeting and IMD endogeneity), unpacks the negative/positive outlier split with secondary research, traces the causal chain, and closes with implications for Core20PLUS5 (additive supplements rather than reallocation). Intended to be converted to PDF for job applications.
 
 ### `README.md`
 
@@ -403,7 +484,7 @@ The first thing anyone sees on GitHub. Contains the research question, key findi
 
 ### `sql/nhs_preventable_mortality.sql`
 
-Replaces the four original SQL files (`query_createtables.sql`, `query_analytics.sql`, `query_outlier.sql`, `women query.sql`). Organised into four labelled sections: table definitions, data loading instructions, analytical queries, and views. Every query now includes `AreaCode NOT IN ('E09000001', 'E06000060')` to exclude the two anomalous districts consistently.
+Replaces the four original SQL files (`query_createtables.sql`, `query_analytics.sql`, `query_outlier.sql`, `women query.sql`). Organised into four labelled sections: table definitions, data loading instructions, analytical queries, and views. Queries currently include `AreaCode NOT IN ('E09000001', 'E06000060')` for City of London and Buckinghamshire UA. The Isles of Scilly exclusion (`E06000053`) is applied only in the R setup chunk; add it to SQL `NOT IN` clauses if re-exporting tables from PostgreSQL.
 
 ---
 
@@ -442,6 +523,7 @@ Replaces the four original SQL files (`query_createtables.sql`, `query_analytics
 | `tidy()` | broom | Model coefficients as a data frame |
 | `glance()` | broom | Model summary stats as one row |
 | `kable()` | knitr | Renders a data frame as an HTML table |
+| `column_spec()` | kableExtra | Sets column widths and styling on a kable |
 | `read_excel()` | readxl | Reads Excel files |
 | `rownames_to_column()` | tibble | Moves row names into a column |
 | `ggplot()` | ggplot2 | Initialises a chart |
@@ -452,6 +534,7 @@ Replaces the four original SQL files (`query_createtables.sql`, `query_analytics
 | `geom_abline()` | ggplot2 | Straight line from slope and intercept |
 | `geom_hline()` / `geom_vline()` | ggplot2 | Horizontal / vertical reference lines |
 | `geom_errorbarh()` | ggplot2 | Horizontal error bars |
+| `annotate()` | ggplot2 | Adds a single text or shape annotation at fixed coordinates |
 | `geom_label_repel()` | ggrepel | Non-overlapping text labels |
 | `scale_colour_gradient()` | ggplot2 | Continuous colour scale |
 | `scale_color_manual()` | ggplot2 | Manually assigned colours |
@@ -479,4 +562,6 @@ Replaces the four original SQL files (`query_createtables.sql`, `query_analytics
 | Scores | Each observation's position on a component. Derived from multiplying the original data by the loadings | PCA scatter plots |
 | Studentised residual | Residual divided by its estimated standard error (computed without that observation). Measured in standard deviations | Outlier testing |
 | Cook's distance | How much all regression coefficients change when one observation is removed. Measures influence, not just prediction error | Outlier testing |
+| Out-of-sample prediction | Using a model fitted on one subset of data to predict values for observations the model never saw. Avoids the prediction being contaminated by the points it's supposed to evaluate | GM residuals chart (model fitted on non-GM districts, predicted onto GM) |
+| Endogeneity | When a predictor is correlated with what the model leaves unexplained, usually because the predictor is partly determined by the outcome or by something causally tied to it. Coefficients from such a model don't isolate a clean causal effect | IMD as predictor when NHS allocation also follows IMD |
 | Ecological analysis | Analysis at area level, not individual level. Associations between area characteristics do not necessarily reflect individual-level relationships | Entire project (stated limitation) |
