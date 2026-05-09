@@ -1,0 +1,791 @@
+---
+title: "Preventable Mortality Under 75: District-Level Variation in England"
+author: "Gabriel Camacho-Reid"
+date: "2011-2019"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: hide
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+analytical_table <- readRDS("../data/cleaned/analytical_table.rds")
+gender_split <- read.csv("../data/cleaned/query_result_gender.csv")
+
+analytical_table <- analytical_table |> filter(AreaCode != "E09000001")
+gender_split <- gender_split |> filter(areacode != "E09000001")
+```
+
+<div style="background:#2C3E50;border-radius:8px;padding:2rem 2.5rem 1.5rem;margin-bottom:2rem;color:white;font-family:sans-serif;">
+<p style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;color:#18BC9C;margin:0 0 0.5rem;">Executive Summary</p>
+<p style="font-size:1.4rem;font-weight:600;line-height:1.3;margin:0 0 1.5rem;">Where deprivation stops predicting mortality — and why it matters for NHS resource allocation</p>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;">
+<div>
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#18BC9C;margin:0 0 0.4rem;">What was found</p>
+<p style="font-size:0.85rem;line-height:1.6;color:rgba(255,255,255,0.88);margin:0;">Deprivation is the strongest predictor of preventable mortality under 75 across English districts — but it consistently overpredicts mortality in areas with high ethnic minority populations, particularly London boroughs. The gender gap in preventable mortality widens sharply with deprivation, and ethnic minority composition predicts male mortality more reliably than female, pointing to gendered health selection effects among economic migrants.</p>
+</div>
+<div>
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#18BC9C;margin:0 0 0.4rem;">How it was done</p>
+<p style="font-size:0.85rem;line-height:1.6;color:rgba(255,255,255,0.88);margin:0;">District-level mortality data (NHS Fingertips, 2011–2019) was combined with ONS deprivation scores and 2021 Census ethnic composition data in a PostgreSQL database. Analysis in R includes multivariate regression with interaction terms, principal component analysis on both mortality trajectories and IMD domain structure, and formal outlier testing using studentised residuals and Cook's distance.</p>
+</div>
+<div>
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#18BC9C;margin:0 0 0.4rem;">Why it matters</p>
+<p style="font-size:0.85rem;line-height:1.6;color:rgba(255,255,255,0.88);margin:0;">NHS resource allocation models that rely on composite deprivation scores alone may systematically underestimate health need in high-migration urban areas and overestimate protective factors in deeply deprived communities outside London. The findings are directly relevant to Core20PLUS5 — NHS England's framework for targeting the most deprived populations alongside locally defined groups with poorer outcomes.</p>
+</div>
+</div>
+</div>
+
+## Project overview
+
+<div style="font-family:sans-serif;margin-bottom:2rem;">
+
+<!-- Philosophy -->
+<div style="border-left:4px solid #18BC9C;background:#f8f9fa;border-radius:0 8px 8px 0;padding:1.1rem 1.4rem;margin-bottom:1.2rem;">
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#18BC9C;margin:0 0 0.4rem;">Philosophy</p>
+<p style="font-size:0.9rem;line-height:1.7;color:#2C3E50;margin:0;">Most health data analyses describe what exists. This one asks why the pattern breaks down — specifically, why deprivation predicts mortality inconsistently across different types of place. The project applies formal statistical methods to findings that first emerged descriptively, tests them rigorously, and frames them in the policy language NHS decision-makers use. The goal is an analytical document that would be recognisable and credible to a health analyst or commissioner, not just a data portfolio piece.</p>
+</div>
+
+<!-- Business case -->
+<div style="border-left:4px solid #E74C3C;background:#f8f9fa;border-radius:0 8px 8px 0;padding:1.1rem 1.4rem;margin-bottom:1.2rem;">
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#E74C3C;margin:0 0 0.4rem;">Business case</p>
+<p style="font-size:0.9rem;line-height:1.7;color:#2C3E50;margin:0;">NHS resource allocation models that use composite deprivation scores as their primary risk signal may systematically misallocate in two directions: underestimating need in high-migration urban areas where the healthy migrant effect suppresses observed mortality relative to deprivation, and missing the gendered dimension of deprivation's effect — men in the most deprived areas bear a disproportionate mortality burden that aggregate scores obscure. Understanding where and why deprivation fails as a predictor has direct implications for how Integrated Care Boards target intervention under Core20PLUS5.</p>
+</div>
+
+<!-- Tools -->
+<div style="margin-bottom:1.2rem;">
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#7F8C8D;margin:0 0 0.6rem;">Tech stack</p>
+<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+<span style="background:#2C3E50;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">R</span>
+<span style="background:#2C3E50;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">PostgreSQL</span>
+<span style="background:#2C3E50;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">Tableau</span>
+<span style="background:#2C3E50;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">Git / GitHub</span>
+<span style="background:#18BC9C;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">ggplot2</span>
+<span style="background:#18BC9C;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">R Markdown</span>
+<span style="background:#18BC9C;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">fingertipsR</span>
+<span style="background:#18BC9C;color:white;font-size:0.75rem;font-weight:600;padding:0.3rem 0.8rem;border-radius:99px;">readxl</span>
+</div>
+</div>
+
+<!-- OKRs -->
+<div style="margin-bottom:1.2rem;">
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#7F8C8D;margin:0 0 0.6rem;">Objectives & key results</p>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.8rem;">
+
+<div style="border:1px solid #dee2e6;border-top:3px solid #2C3E50;border-radius:0 0 8px 8px;padding:0.9rem 1rem;">
+<p style="font-size:0.8rem;font-weight:700;color:#2C3E50;margin:0 0 0.5rem;">Statistical rigour</p>
+<ul style="font-size:0.78rem;color:#555;line-height:1.6;margin:0;padding-left:1.1rem;">
+<li>Multivariate regression with R² and CIs reported</li>
+<li>Interaction terms formally tested</li>
+<li>Outliers identified by studentised residuals, not threshold</li>
+</ul>
+</div>
+
+<div style="border:1px solid #dee2e6;border-top:3px solid #18BC9C;border-radius:0 0 8px 8px;padding:0.9rem 1rem;">
+<p style="font-size:0.8rem;font-weight:700;color:#2C3E50;margin:0 0 0.5rem;">NHS policy alignment</p>
+<ul style="font-size:0.78rem;color:#555;line-height:1.6;margin:0;padding-left:1.1rem;">
+<li>Core20PLUS5 framework applied throughout</li>
+<li>Findings framed as actionable for ICB commissioners</li>
+<li>Executive summary readable by non-technical audience</li>
+</ul>
+</div>
+
+<div style="border:1px solid #dee2e6;border-top:3px solid #E74C3C;border-radius:0 0 8px 8px;padding:0.9rem 1rem;">
+<p style="font-size:0.8rem;font-weight:700;color:#2C3E50;margin:0 0 0.5rem;">Portfolio quality</p>
+<ul style="font-size:0.78rem;color:#555;line-height:1.6;margin:0;padding-left:1.1rem;">
+<li>ETL pipeline documented and reproducible</li>
+<li>Tableau dashboard live on Tableau Public</li>
+<li>Repo navigable without opening the report</li>
+</ul>
+</div>
+
+</div>
+</div>
+
+<!-- SMART goals -->
+<div style="margin-bottom:1.2rem;">
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#7F8C8D;margin:0 0 0.6rem;">SMART goals</p>
+<div style="border:1px solid #dee2e6;border-radius:8px;overflow:hidden;">
+
+<div style="display:grid;grid-template-columns:2.5rem 1fr;border-bottom:1px solid #dee2e6;">
+<div style="background:#2C3E50;display:flex;align-items:center;justify-content:center;padding:0.75rem;"><span style="color:white;font-size:1rem;font-weight:700;">S</span></div>
+<div style="padding:0.65rem 1rem;font-size:0.8rem;color:#2C3E50;line-height:1.5;"><strong>Specific:</strong> Identify English districts in the Core20 whose preventable mortality deviates significantly from prediction after controlling for ethnic composition and gender, and characterise them using IMD domain analysis.</div>
+</div>
+
+<div style="display:grid;grid-template-columns:2.5rem 1fr;border-bottom:1px solid #dee2e6;">
+<div style="background:#18BC9C;display:flex;align-items:center;justify-content:center;padding:0.75rem;"><span style="color:white;font-size:1rem;font-weight:700;">M</span></div>
+<div style="padding:0.65rem 1rem;font-size:0.8rem;color:#2C3E50;line-height:1.5;"><strong>Measurable:</strong> Regression R² reported; at least one significant interaction term; factor analysis explaining ≥60% of IMD domain variance; all findings with confidence intervals.</div>
+</div>
+
+<div style="display:grid;grid-template-columns:2.5rem 1fr;border-bottom:1px solid #dee2e6;">
+<div style="background:#3498DB;display:flex;align-items:center;justify-content:center;padding:0.75rem;"><span style="color:white;font-size:1rem;font-weight:700;">A</span></div>
+<div style="padding:0.65rem 1rem;font-size:0.8rem;color:#2C3E50;line-height:1.5;"><strong>Achievable:</strong> Builds on existing cleaned data and PostgreSQL database. IMD domain data already downloaded. No new data sources required.</div>
+</div>
+
+<div style="display:grid;grid-template-columns:2.5rem 1fr;border-bottom:1px solid #dee2e6;">
+<div style="background:#9B59B6;display:flex;align-items:center;justify-content:center;padding:0.75rem;"><span style="color:white;font-size:1rem;font-weight:700;">R</span></div>
+<div style="padding:0.65rem 1rem;font-size:0.8rem;color:#2C3E50;line-height:1.5;"><strong>Relevant:</strong> Directly addresses Core20PLUS5 PLUS population identification. Findings are framed as intelligence for ICB commissioners, not academic observation.</div>
+</div>
+
+<div style="display:grid;grid-template-columns:2.5rem 1fr;">
+<div style="background:#E74C3C;display:flex;align-items:center;justify-content:center;padding:0.75rem;"><span style="color:white;font-size:1rem;font-weight:700;">T</span></div>
+<div style="padding:0.65rem 1rem;font-size:0.8rem;color:#2C3E50;line-height:1.5;"><strong>Time-bound:</strong> Four phases across four months — ETL documentation, regression and factor analysis, report rebuild, portfolio publication.</div>
+</div>
+
+</div>
+</div>
+
+<!-- Stakeholders & team -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8rem;">
+
+<div style="border:1px solid #dee2e6;border-radius:8px;padding:0.9rem 1rem;">
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#7F8C8D;margin:0 0 0.5rem;">Stakeholders</p>
+<ul style="font-size:0.8rem;color:#2C3E50;line-height:1.8;margin:0;padding-left:1.1rem;">
+<li><strong>NHS commissioners / ICBs</strong> — primary end users of findings</li>
+<li><strong>Public health analysts</strong> — methodological audience</li>
+<li><strong>Recruiters & hiring managers</strong> — portfolio audience</li>
+</ul>
+</div>
+
+<div style="border:1px solid #dee2e6;border-radius:8px;padding:0.9rem 1rem;">
+<p style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#7F8C8D;margin:0 0 0.5rem;">Team</p>
+<div style="display:flex;align-items:center;gap:0.8rem;margin-top:0.3rem;">
+<div style="width:36px;height:36px;border-radius:50%;background:#2C3E50;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span style="color:white;font-size:0.8rem;font-weight:700;">GCR</span></div>
+<div>
+<p style="font-size:0.85rem;font-weight:600;color:#2C3E50;margin:0;">Gabriel Camacho-Reid</p>
+<p style="font-size:0.75rem;color:#7F8C8D;margin:0;">Data analyst — sole contributor. Data engineering, SQL, R analysis, visualisation, report.</p>
+</div>
+</div>
+</div>
+
+</div>
+</div>
+
+## Background
+
+Preventable mortality — deaths from causes considered avoidable through effective public health intervention or healthcare — varies significantly across English districts. Understanding what drives this variation matters for how NHS resources are allocated and where public health intervention is most needed.
+
+This analysis examines district-level variation in preventable mortality under 75 across England between 2011 and 2019, using data from NHS Fingertips, the ONS Index of Multiple Deprivation 2019, and the 2021 Census. It asks which districts outperform or underperform their deprivation profile, and what area-level characteristics distinguish them.
+
+## Data and methods
+
+Data on preventable mortality under 75 (NHS Fingertips indicator E03, IndicatorID 93721) was extracted for English districts and unitary authorities using the 2020/21 boundary definitions (AreaTypeID 301). Three-year rolling averages were used in preference to single-year figures to reduce statistical noise at district level. The analysis covers the period 2011–2019, excluding 2020 onwards to avoid the statistical discontinuity introduced by Covid-19 and the 2019 ONS revision to the preventable mortality definition.
+
+Deprivation was measured using the IMD 2019 score aggregated to district level from LSOA-level data published by the Ministry of Housing, Communities and Local Government. Ethnic composition was derived from the 2021 Census (table TS021), expressed as the percentage of usual residents not identifying as White British. Gender breakdowns are built into the Fingertips indicator.
+
+All data was loaded into a PostgreSQL database and joined on ONS area codes. Analysis was conducted in R. The City of London and Buckinghamshire UA were excluded due to anomalous population size and boundary mismatch respectively.
+
+### Limitations
+
+- Analysis is ecological — all associations are at area level, not individual level
+- Ethnic minority composition reflects area characteristics, not individual outcomes by ethnicity
+- Deprivation and ethnic minority composition are correlated in many districts, limiting independent interpretation
+- Boundary changes across 2011–2019 affect comparability for some districts
+- NHS reporting standards and cause of death coding changed across the study period
+
+## Data quality assessment
+
+```{r data_quality, results='asis'}
+library(knitr)
+library(tidyr)
+
+# --- District counts -----------------------------------------------------------
+# Both excluded districts were in the raw Fingertips extract and removed by choice.
+# City of London is filtered in the setup chunk; Buckinghamshire at the cleaning stage.
+excluded <- data.frame(
+  AreaCode = c("E09000001", "E06000060"),
+  AreaName = c("City of London", "Buckinghamshire"),
+  Reason   = c("Specially constructed district: the Square Mile has a resident population of ~9,000 but a daytime population orders of magnitude larger, making area-level mortality rates non-comparable with other districts",
+               "Specially constructed unitary authority: Buckinghamshire UA was created in April 2020 by merging four former districts, so the 2020/21 boundary definition used by Fingertips does not correspond to any consistent geography across the 2011–2019 study period")
+)
+
+n_excluded  <- nrow(excluded)
+n_analysis  <- n_distinct(analytical_table$AreaCode)
+n_raw       <- n_analysis + n_excluded
+
+# --- Expected vs actual row counts per district -------------------------------
+expected_sex     <- 3   # Male, Female, Persons
+expected_periods <- 7   # 2011-13 through 2017-19
+
+completeness <- analytical_table |>
+  group_by(AreaCode, AreaName) |>
+  summarise(
+    n_rows          = n(),
+    n_sex_values    = n_distinct(Sex),
+    n_periods       = n_distinct(Timeperiod),
+    .groups = "drop"
+  ) |>
+  mutate(
+    expected_rows  = expected_sex * expected_periods,
+    complete       = n_rows == expected_rows
+  )
+
+n_complete   <- sum(completeness$complete)
+n_incomplete <- sum(!completeness$complete)
+
+# --- Suppressed values (Value == 0) -------------------------------------------
+suppressed <- analytical_table |>
+  filter(Value == 0) |>
+  group_by(Sex) |>
+  summarise(suppressed_n = n(), .groups = "drop")
+
+n_suppressed_total <- sum(suppressed$suppressed_n)
+
+# --- NA counts for key analytical columns ------------------------------------
+key_cols <- c("Value", "imd_score", "pct_ethnic_minority",
+              "Count", "Denominator", "LowerCI95.0limit", "UpperCI95.0limit")
+
+na_counts <- analytical_table |>
+  summarise(across(all_of(key_cols), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "Column", values_to = "NA_count") |>
+  mutate(
+    Pct_of_rows = round(NA_count / nrow(analytical_table) * 100, 1),
+    Column = recode(Column,
+      "LowerCI95.0limit" = "Lower CI (95%)",
+      "UpperCI95.0limit" = "Upper CI (95%)"
+    )
+  )
+
+# --- Summary table -----------------------------------------------------------
+summary_tbl <- data.frame(
+  Metric = c(
+    "Districts in raw Fingertips extract",
+    "Excluded — City of London",
+    "Excluded — Buckinghamshire UA",
+    "Districts in analytical dataset",
+    "Districts with complete time-series (all 7 periods × 3 sex categories)",
+    "Districts with incomplete time-series",
+    "Total rows in analytical table",
+    "Rows with suppressed mortality value (Value = 0)",
+    "  — of which: Male sex category",
+    "  — of which: Female sex category",
+    "  — of which: Persons sex category"
+  ),
+  Value = c(
+    n_raw,
+    1,
+    1,
+    n_analysis,
+    n_complete,
+    n_incomplete,
+    nrow(analytical_table),
+    n_suppressed_total,
+    sum(suppressed$suppressed_n[suppressed$Sex == "Male"]),
+    sum(suppressed$suppressed_n[suppressed$Sex == "Female"]),
+    sum(suppressed$suppressed_n[suppressed$Sex == "Persons"])
+  )
+)
+
+kable(summary_tbl,
+      col.names = c("Metric", "Count"),
+      caption   = "Table 1: Data coverage summary")
+```
+
+```{r dq_exclusions}
+kable(excluded,
+      col.names = c("Area Code", "District", "Reason for exclusion"),
+      caption   = "Table 2: Excluded districts")
+```
+
+```{r dq_na_counts}
+kable(na_counts,
+      col.names = c("Column", "NA count", "% of all rows"),
+      caption   = "Table 3: Missing values in key analytical columns")
+```
+
+```{r dq_suppressed_by_year, results='asis'}
+suppressed_year <- analytical_table |>
+  filter(Value == 0) |>
+  count(Timeperiod, Sex, name = "suppressed_n") |>
+  pivot_wider(names_from = Sex, values_from = suppressed_n, values_fill = 0) |>
+  arrange(Timeperiod)
+
+if (nrow(suppressed_year) > 0) {
+  kable(suppressed_year,
+        caption = "Table 4: Suppressed values by time period and sex category")
+} else {
+  cat("**Table 4:** No suppressed values (Value = 0) found in the analytical dataset. All districts have non-zero mortality rates across all time periods and sex categories.")
+}
+```
+
+**Missingness assessment.** Two districts were excluded by design rather than data failure: City of London and Buckinghamshire are both specially constructed administrative units whose boundaries and population characteristics make them non-comparable with standard English districts (see Table 2). Their exclusion does not affect the representativeness of findings across the remaining districts. Suppressed values (`Value = 0`) are concentrated in small districts where counts fall below NHS disclosure thresholds; they are not randomly distributed across the country but are associated with areas of low population. This suppression pattern is unlikely to bias the main findings, which rely on average mortality across all years — districts with suppression in one or two years still contribute to multi-year averages. However, comparisons of individual time periods should note that the most sparsely populated districts are systematically underrepresented in single-year analyses. No NAs are expected in the core analytical columns (`imd_score`, `pct_ethnic_minority`) because these are area-level constants that apply to all rows for a given district; any NAs in these columns would indicate a join failure and should be investigated before analysis proceeds.
+
+## Statistical analysis
+
+### Multivariate regression
+
+Four regression models are estimated using the full district-level panel — one observation per district, sex category, and time period. The baseline replicates the earlier approach, regressing average mortality on IMD score alone. Subsequent models add ethnic minority composition, a sex interaction, a linear year trend, and a year × sex interaction, allowing the gender gap in preventable mortality to be tested formally across the study period rather than observed descriptively.
+
+```{r regression_prep, message=FALSE}
+library(broom)
+
+panel <- analytical_table |>
+  filter(Value != 0) |>
+  mutate(
+    year   = as.numeric(substr(as.character(TimeperiodSortable), 1, 4)),
+    year_c = year - 2014
+  )
+
+persons_avg <- panel |>
+  filter(Sex == "Persons") |>
+  group_by(AreaCode, AreaName) |>
+  summarise(
+    avg_mortality = mean(Value, na.rm = TRUE),
+    avg_imd       = mean(imd_score, na.rm = TRUE),
+    avg_ethnicity = mean(pct_ethnic_minority, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+panel_ms <- panel |> filter(Sex %in% c("Male", "Female"))
+```
+
+```{r regression_models}
+m1 <- lm(avg_mortality ~ avg_imd, data = persons_avg)
+m2 <- lm(Value ~ imd_score + pct_ethnic_minority + Sex +
+           pct_ethnic_minority:Sex,
+         data = panel_ms)
+m3 <- lm(Value ~ imd_score + pct_ethnic_minority + Sex +
+           pct_ethnic_minority:Sex + year_c,
+         data = panel_ms)
+m4 <- lm(Value ~ imd_score + pct_ethnic_minority + Sex +
+           pct_ethnic_minority:Sex + year_c + year_c:Sex,
+         data = panel_ms)
+
+model_compare <- tibble(
+  Model  = c("M1: IMD only (v1 baseline, persons averaged)",
+             "M2: + ethnicity + sex + sex×ethnicity (panel)",
+             "M3: + year trend",
+             "M4: + year × sex"),
+  N      = c(nobs(m1), nobs(m2), nobs(m3), nobs(m4)),
+  R2     = round(c(summary(m1)$r.squared, summary(m2)$r.squared,
+                   summary(m3)$r.squared, summary(m4)$r.squared), 3),
+  Adj_R2 = round(c(summary(m1)$adj.r.squared, summary(m2)$adj.r.squared,
+                   summary(m3)$adj.r.squared, summary(m4)$adj.r.squared), 3),
+  AIC    = round(c(AIC(m1), AIC(m2), AIC(m3), AIC(m4)), 0)
+)
+
+kable(model_compare,
+      col.names = c("Model", "N", "R²", "Adj R²", "AIC"),
+      caption   = "Table 5: Model comparison — progressive addition of predictors")
+```
+
+**Note on model comparison.** M1 operates on district-level averages (one row per district, Persons only), while M2–M4 use the full panel (one row per district × sex × year). R² values are not directly comparable across these different datasets — M1's R² reflects cross-sectional explained variance among ~300 districts, while M2–M4's R² reflects explained variance across ~4,000 panel observations that include within-district year-to-year variation. The comparison between M2, M3, and M4 is valid because they share the same dataset, and shows the incremental contribution of year and year × sex terms.
+
+```{r regression_coef_table}
+```
+
+```{r regression_coef_table}
+m4_tidy <- tidy(m4, conf.int = TRUE) |>
+  filter(term != "(Intercept)") |>
+  mutate(
+    term = recode(term,
+      "imd_score"                   = "IMD score",
+      "pct_ethnic_minority"         = "% ethnic minority",
+      "SexMale"                     = "Sex: Male",
+      "year_c"                      = "Year trend (female, centred 2014)",
+      "pct_ethnic_minority:SexMale" = "% ethnic minority × Male",
+      "SexMale:year_c"              = "Year trend × Male"
+    ),
+    sig = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE            ~ ""
+    )
+  )
+
+kable(
+  m4_tidy |>
+    select(term, estimate, std.error, conf.low, conf.high, p.value, sig) |>
+    mutate(across(c(estimate, std.error, conf.low, conf.high), ~ round(., 3)),
+           p.value = round(p.value, 4)),
+  col.names = c("Predictor", "Estimate", "SE", "CI low (95%)", "CI high (95%)", "p", ""),
+  caption   = "Table 6: M4 full coefficient table"
+)
+```
+
+```{r regression_coef_plot, fig.cap="Figure 4: M4 coefficient plot with 95% confidence intervals"}
+ggplot(m4_tidy, aes(x = estimate, y = reorder(term, estimate))) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.25, colour = "#6B3FA0", linewidth = 0.7) +
+  geom_point(size = 3, colour = "#3D1A4F") +
+  labs(
+    title    = "Multivariate regression coefficients (M4)",
+    subtitle = "Outcome: preventable mortality rate under 75. 95% confidence intervals shown.",
+    x        = "Coefficient estimate",
+    y        = NULL,
+    caption  = "Source: NHS Fingertips E03, ONS IMD 2019, Census 2021. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+### Factor analysis
+
+Two principal component analyses use the time dimension in the data. The first treats the seven annual time points as variables, with each district as an observation, to identify whether districts cluster by mortality trajectory — consistently high, consistently low, or changing direction over 2011–2019. The second uses the seven IMD domain scores aggregated from LSOA to district level, identifying which combinations of deprivation dimensions are most strongly associated with mortality variation beyond the composite score.
+
+#### Part A: Temporal mortality trajectories
+
+```{r fa_traj_prep}
+traj_wide <- panel |>
+  filter(Sex == "Persons") |>
+  select(AreaCode, AreaName, year, Value) |>
+  pivot_wider(names_from = year, values_from = Value, names_prefix = "y") |>
+  left_join(persons_avg |> select(AreaCode, avg_imd, avg_ethnicity),
+            by = "AreaCode") |>
+  filter(complete.cases(across(starts_with("y"))))
+
+traj_matrix <- traj_wide |> select(starts_with("y")) |> scale()
+pca_traj    <- prcomp(traj_matrix, center = FALSE, scale. = FALSE)
+
+scree_traj <- tibble(
+  PC      = seq_along(pca_traj$sdev),
+  var_exp = (pca_traj$sdev^2) / sum(pca_traj$sdev^2) * 100,
+  cum_var = cumsum((pca_traj$sdev^2) / sum(pca_traj$sdev^2) * 100)
+)
+```
+
+```{r fa_traj_scree, fig.cap="Figure 5: Scree plot — temporal mortality trajectory PCA"}
+ggplot(scree_traj, aes(x = PC, y = var_exp)) +
+  geom_col(fill = "#6B3FA0", alpha = 0.8) +
+  geom_line(aes(y = cum_var), colour = "#C2185B") +
+  geom_point(aes(y = cum_var), colour = "#C2185B", size = 2) +
+  labs(
+    title    = "Scree plot: temporal mortality trajectory PCA",
+    subtitle = "Bars = variance per component. Line = cumulative variance.",
+    x        = "Principal component",
+    y        = "Variance explained (%)"
+  ) +
+  theme_minimal()
+```
+
+```{r fa_traj_scores, fig.cap="Figure 6: District trajectory scores — PC1 vs PC2, coloured by IMD"}
+scores_traj <- as.data.frame(pca_traj$x) |>
+  bind_cols(traj_wide |> select(AreaCode, AreaName, avg_imd, avg_ethnicity))
+
+outlier_threshold_pc1 <- quantile(abs(scores_traj$PC1), 0.95)
+outlier_threshold_pc2 <- quantile(abs(scores_traj$PC2), 0.95)
+
+ggplot(scores_traj, aes(x = PC1, y = PC2, colour = avg_imd)) +
+  geom_point(alpha = 0.7, size = 2.5) +
+  geom_label_repel(
+    data = scores_traj |>
+      filter(abs(PC1) > outlier_threshold_pc1 | abs(PC2) > outlier_threshold_pc2),
+    aes(label = AreaName),
+    size = 3, fill = "white", label.padding = 0.15, max.overlaps = 12
+  ) +
+  scale_colour_gradient(low = "#D3D1C7", high = "#534AB7", name = "IMD score") +
+  labs(
+    title    = "District mortality trajectories 2011–2019 — PCA scores",
+    subtitle = "PC1 captures overall mortality level; PC2 captures trajectory direction over time",
+    x        = paste0("PC1 (", round(scree_traj$var_exp[1], 1), "% variance)"),
+    y        = paste0("PC2 (", round(scree_traj$var_exp[2], 1), "% variance)"),
+    caption  = "Source: NHS Fingertips E03, ONS IMD 2019. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+#### Part B: IMD domain structure
+
+```{r fa_imd_prep, message=FALSE}
+library(readxl)
+library(tibble)
+
+imd_domains_raw <- read_excel(
+  "../data/raw/direct IMD scores.xlsx",
+  sheet = "IoD2019 Scores"
+) |>
+  rename(
+    AreaCode    = `Local Authority District code (2019)`,
+    income      = `Income Score (rate)`,
+    employment  = `Employment Score (rate)`,
+    education   = `Education, Skills and Training Score`,
+    health      = `Health Deprivation and Disability Score`,
+    crime       = `Crime Score`,
+    housing     = `Barriers to Housing and Services Score`,
+    environment = `Living Environment Score`
+  ) |>
+  filter(!AreaCode %in% c("E09000001", "E06000060")) |>
+  group_by(AreaCode) |>
+  summarise(across(c(income, employment, education, health, crime, housing, environment),
+                   \(x) mean(x, na.rm = TRUE)),
+            .groups = "drop") |>
+  inner_join(
+    persons_avg |> select(AreaCode, AreaName, avg_mortality, avg_imd, avg_ethnicity),
+    by = "AreaCode"
+  )
+
+imd_matrix <- imd_domains_raw |> select(income:environment) |> scale()
+pca_imd    <- prcomp(imd_matrix, center = FALSE, scale. = FALSE)
+
+scree_imd <- tibble(
+  PC      = seq_along(pca_imd$sdev),
+  var_exp = (pca_imd$sdev^2) / sum(pca_imd$sdev^2) * 100,
+  cum_var = cumsum((pca_imd$sdev^2) / sum(pca_imd$sdev^2) * 100)
+)
+```
+
+```{r fa_imd_scree, fig.cap="Figure 7: Scree plot — IMD domain PCA"}
+ggplot(scree_imd, aes(x = PC, y = var_exp)) +
+  geom_col(fill = "#6B3FA0", alpha = 0.8) +
+  geom_line(aes(y = cum_var), colour = "#C2185B") +
+  geom_point(aes(y = cum_var), colour = "#C2185B", size = 2) +
+  labs(
+    title    = "Scree plot: IMD domain PCA",
+    subtitle = "Bars = variance per component. Line = cumulative variance.",
+    x        = "Principal component",
+    y        = "Variance explained (%)"
+  ) +
+  theme_minimal()
+```
+
+```{r fa_imd_loadings}
+loadings_imd <- as.data.frame(pca_imd$rotation[, 1:3]) |>
+  rownames_to_column("Domain") |>
+  mutate(
+    Domain = recode(Domain,
+      "income"      = "Income deprivation",
+      "employment"  = "Employment deprivation",
+      "education"   = "Education, skills & training",
+      "health"      = "Health deprivation & disability",
+      "crime"       = "Crime",
+      "housing"     = "Barriers to housing & services",
+      "environment" = "Living environment"
+    ),
+    across(starts_with("PC"), ~ round(., 3))
+  )
+
+kable(loadings_imd,
+      col.names = c("IMD domain", "PC1", "PC2", "PC3"),
+      caption   = "Table 7: IMD domain PCA loadings (first three components)")
+```
+
+```{r fa_imd_scores, fig.cap="Figure 8: IMD domain PC1 vs preventable mortality, coloured by ethnic minority share"}
+scores_imd <- as.data.frame(pca_imd$x) |>
+  bind_cols(imd_domains_raw |> select(AreaCode, AreaName, avg_mortality, avg_imd, avg_ethnicity))
+
+ggplot(scores_imd, aes(x = PC1, y = avg_mortality, colour = avg_ethnicity)) +
+  geom_point(alpha = 0.7, size = 2.5) +
+  geom_smooth(method = "lm", se = TRUE, colour = "#C2185B", linetype = "dashed") +
+  geom_label_repel(
+    data = scores_imd |>
+      filter(abs(PC1) > quantile(abs(PC1), 0.95) |
+               avg_mortality > quantile(avg_mortality, 0.95)),
+    aes(label = AreaName),
+    size = 3, fill = "white", label.padding = 0.15, max.overlaps = 10
+  ) +
+  scale_colour_gradient(low = "#D3D1C7", high = "#534AB7", name = "% ethnic minority") +
+  labs(
+    title    = "IMD domain structure vs preventable mortality",
+    subtitle = "PC1 captures overall material deprivation depth across all domains",
+    x        = paste0("PC1 — overall deprivation depth (",
+                      round(scree_imd$var_exp[1], 1), "% variance)"),
+    y        = "Average preventable mortality rate (under 75)",
+    caption  = "Source: NHS Fingertips E03, ONS IMD 2019. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+### Formal outlier testing
+
+Districts that deviate substantially from their deprivation-predicted mortality rate were identified informally in the earlier analysis using a fixed residual threshold. Studentised residuals and Cook's distance from a district-level OLS model — regressing average mortality on IMD score and ethnic minority composition — replace that approach with formal statistical criteria. Studentised residuals greater than 2 in absolute value flag districts whose mortality is poorly predicted by the model. Cook's distance greater than 4/n identifies districts whose removal would materially shift the regression estimates.
+
+```{r outlier_prep}
+m_district <- lm(avg_mortality ~ avg_imd + avg_ethnicity, data = persons_avg)
+
+n_districts <- nrow(persons_avg)
+
+outlier_df <- persons_avg |>
+  mutate(
+    fitted     = fitted(m_district),
+    residual   = residuals(m_district),
+    stud_resid = rstudent(m_district),
+    cooks_d    = cooks.distance(m_district),
+    outlier    = abs(stud_resid) > 2,
+    influential = cooks_d > 4 / n_districts
+  )
+```
+
+```{r outlier_table}
+outlier_table <- outlier_df |>
+  filter(outlier | influential) |>
+  arrange(desc(abs(stud_resid))) |>
+  select(AreaName, avg_mortality, avg_imd, avg_ethnicity,
+         stud_resid, cooks_d, outlier, influential) |>
+  mutate(
+    avg_mortality = round(avg_mortality, 1),
+    avg_imd       = round(avg_imd, 1),
+    avg_ethnicity = round(avg_ethnicity, 1),
+    stud_resid    = round(stud_resid, 3),
+    cooks_d       = round(cooks_d, 4),
+    Flag          = case_when(
+      outlier & influential ~ "Outlier + Influential",
+      outlier               ~ "Outlier",
+      influential           ~ "Influential",
+      TRUE                  ~ ""
+    )
+  ) |>
+  select(AreaName, avg_mortality, avg_imd, avg_ethnicity, stud_resid, cooks_d, Flag)
+
+kable(outlier_table,
+      col.names = c("District", "Avg mortality", "IMD score", "% ethnic minority",
+                    "Studentised residual", "Cook's D", "Flag"),
+      caption   = "Table 8: Formally identified outlier and high-influence districts")
+```
+
+```{r outlier_plot, fig.cap="Figure 9: Residual plot — studentised residuals with Cook's distance as bubble size"}
+label_threshold <- quantile(abs(outlier_df$stud_resid), 0.95)
+
+ggplot(outlier_df, aes(x = fitted, y = stud_resid, size = cooks_d, colour = avg_ethnicity)) +
+  geom_hline(yintercept = c(-2, 2), linetype = "dashed", colour = "grey50") +
+  geom_hline(yintercept = 0, colour = "grey70") +
+  geom_point(alpha = 0.6) +
+  geom_label_repel(
+    data = outlier_df |> filter(abs(stud_resid) > label_threshold),
+    aes(label = AreaName),
+    size = 3, fill = "white", label.padding = 0.15, max.overlaps = 12,
+    show.legend = FALSE
+  ) +
+  scale_colour_gradient(low = "#D3D1C7", high = "#534AB7", name = "% ethnic minority") +
+  scale_size_continuous(name = "Cook's distance", range = c(1, 6)) +
+  labs(
+    title    = "Studentised residuals by fitted value",
+    subtitle = "Dashed lines at ±2. Bubble size = Cook's distance. Districts outside the bands are formal outliers.",
+    x        = "Fitted mortality rate",
+    y        = "Studentised residual",
+    caption  = "Source: NHS Fingertips E03, ONS IMD 2019, Census 2021. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+## Findings
+
+### Deprivation is a strong predictor of preventable mortality — but not the whole story
+
+Across English districts, IMD deprivation score is positively associated with preventable mortality under 75 for both men and women. Districts with the highest deprivation scores — Blackpool, Manchester, Liverpool, Middlesbrough — consistently show the highest mortality rates. Districts with the lowest deprivation — Hart, Wokingham, South Cambridgeshire — show the lowest.
+
+However, deprivation alone does not fully explain the variation. A significant number of districts perform substantially better or worse than their deprivation score would predict.
+
+```{r actual_vs_predicted, fig.cap="Figure 1: Actual vs predicted preventable mortality by district"}
+district_avg <- analytical_table |>
+  filter(Sex == "Persons" & Value != 0) |>
+  group_by(AreaCode, AreaName) |>
+  summarise(
+    avg_mortality = mean(Value, na.rm = TRUE),
+    avg_imd = mean(imd_score, na.rm = TRUE),
+    avg_ethnicity = mean(pct_ethnic_minority, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+model <- lm(avg_mortality ~ avg_imd, data = district_avg)
+district_avg$predicted <- predict(model, district_avg)
+district_avg$residual <- district_avg$avg_mortality - district_avg$predicted
+
+district_avg$label <- ifelse(
+  abs(district_avg$residual) > 25 | district_avg$avg_ethnicity > 70,
+  district_avg$AreaName, NA
+)
+
+ggplot(district_avg, aes(x = predicted, y = avg_mortality, colour = avg_ethnicity)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +
+  geom_point(alpha = 0.7, size = 2.5) +
+  geom_label_repel(aes(label = label), size = 3, max.overlaps = 15,
+                   fill = "white", label.padding = 0.15) +
+  scale_colour_gradient(low = "#D3D1C7", high = "#534AB7",
+                        name = "% ethnic minority") +
+  labs(
+    title = "Actual vs predicted preventable mortality by district",
+    subtitle = "Points below the line outperform their deprivation profile",
+    x = "Predicted mortality rate (from IMD)",
+    y = "Actual average mortality rate (under 75)",
+    caption = "Source: NHS Fingertips E03, ONS IMD 2019, Census 2021. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+### High ethnic minority districts systematically outperform their deprivation profile
+
+Districts with high ethnic minority populations — particularly London boroughs — consistently sit below the deprivation-predicted mortality line. Harrow, Enfield, Barnet, Newham, and Brent all show substantially lower mortality than their IMD scores would predict.
+
+This pattern is concentrated in London but not exclusive to it. Birmingham, Bradford, and Leicester show similar though weaker effects. The consistency of the pattern across multiple London boroughs suggests a structural rather than coincidental explanation.
+
+Two competing explanations are plausible. First, the healthy migrant effect — migrants are positively selected for health through income thresholds and physical fitness requirements, meaning high migration areas contain populations healthier than their area deprivation implies. Second, urban service concentration — London's density of NHS infrastructure, specialist services, and economic opportunity creates a protective effect that partially offsets deprivation penalties regardless of population composition.
+
+These explanations are not mutually exclusive, and this analysis cannot distinguish between them at area level. Both are consistent with the observed pattern and both have implications for NHS resource allocation policy.
+
+### The gender gap widens with deprivation
+
+```{r gender_gap, fig.cap="Figure 2: Gender gap in preventable mortality by deprivation decile"}
+district_gender <- analytical_table |>
+  filter(Sex %in% c("Male", "Female") & Value != 0) |>
+  mutate(imd_decile = ntile(imd_score, 10)) |>
+  group_by(imd_decile, Sex) |>
+  summarise(
+    avg_mortality = mean(Value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+gender_gap <- district_gender |>
+  tidyr::pivot_wider(names_from = Sex, values_from = avg_mortality) |>
+  mutate(gap = Male - Female)
+
+ggplot(gender_gap, aes(x = imd_decile, y = gap)) +
+  geom_col(fill = "#534AB7", alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, colour = "#D85A30", linetype = "dashed") +
+  scale_x_continuous(breaks = 1:10,
+                     labels = c("1\nLeast\ndeprived", 2:9, "10\nMost\ndeprived")) +
+  labs(
+    title = "Gender gap in preventable mortality widens with deprivation",
+    subtitle = "Difference between male and female mortality rates by deprivation decile, 2011–2019",
+    x = "Deprivation decile (IMD 2019)",
+    y = "Male minus female mortality rate",
+    caption = "Source: NHS Fingertips E03, ONS IMD 2019. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+Women have lower preventable mortality than men across all deprivation levels. However the gap is not constant — it widens substantially as deprivation increases, meaning men bear a disproportionately greater mortality burden in the most deprived areas.
+
+### Ethnic minority composition predicts male outcomes more consistently than female
+
+```{r gender_scatter, fig.cap="Figure 3: Preventable mortality by deprivation and gender"}
+ggplot(gender_split, aes(x = avg_imd, y = avg_mortality, color = sex)) +
+  geom_point(aes(size = avg_ethnicity), alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(values = c("Female" = "#E05C8A", "Male" = "#378ADD")) +
+  labs(
+    title = "Preventable mortality by deprivation and gender",
+    subtitle = "Bubble size = % ethnic minority population, 2011-2019",
+    x = "Average IMD score",
+    y = "Average mortality rate (under 75)",
+    color = "Sex",
+    size = "% ethnic minority",
+    caption = "Source: NHS Fingertips E03, ONS IMD 2019, Census 2021. England districts 2011–2019."
+  ) +
+  theme_minimal()
+```
+
+The scatter of high ethnic minority districts around the female trend line is notably wider than around the male line. Ethnic minority composition is a stronger and more consistent predictor of male mortality outcomes than female outcomes.
+
+This is consistent with gendered migration pathways. Male economic migrants — who disproportionately enter on skilled work visas with income thresholds — are more strongly health-selected than women who more commonly migrate through family reunion routes. The healthy migrant effect, to the extent it operates, is therefore likely a gendered phenomenon that applies more consistently to men than to women.
+## Conclusions
+
+Deprivation is the strongest single predictor of preventable mortality under 75 across English districts, but it is an incomplete explanation. Three findings complicate the simple deprivation narrative.
+
+First, districts with high ethnic minority populations — concentrated in London but present elsewhere — consistently outperform their deprivation-predicted mortality rate. The most plausible explanations involve health selection effects among economic migrants and the protective effect of urban service concentration in London. This analysis cannot distinguish between these explanations at area level, but both carry implications for how the NHS interprets deprivation-based resource allocation in high migration urban areas.
+
+Second, the mortality burden of deprivation falls disproportionately on men. The gender gap in preventable mortality widens as deprivation increases, suggesting that whatever protective factors exist in more deprived communities operate more strongly for women than for men.
+
+Third, ethnic minority composition predicts male mortality more consistently than female mortality. This is consistent with gendered migration pathways — male economic migrants face stronger health selection through visa income thresholds than women who more commonly arrive through family reunion routes.
+
+Taken together these findings suggest that area-level deprivation measures like IMD may systematically misrepresent health risk in high migration urban areas, and that the relationship between deprivation and mortality is moderated by both geography and gender in ways that a simple deprivation ranking does not capture.
+
+## Future directions
+
+Several avenues remain open for further analysis. A formal regression with an urban-rural classification and interaction terms between sex and geography would allow statistical testing of the urban service concentration hypothesis. Separating the ethnic minority composition variable by broad ethnic group — rather than treating it as a single percentage — would allow examination of whether the protective effect differs across communities. Extending the time series beyond 2019 with appropriate Covid adjustments would reveal whether the patterns observed here persisted through the recent period of NHS disruption.
